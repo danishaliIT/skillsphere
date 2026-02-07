@@ -182,7 +182,7 @@ class CourseSerializer(serializers.ModelSerializer):
                 for lesson_data in lessons_data:
                     lesson_data.pop('temp_video_key', None)
                     lesson_data.pop('temp_doc_key', None)
-                    Lesson.objects.create(sub_module=week, **lesson_data)
+                    Lesson.objects.create(week=week, **lesson_data)
         
         return course
 
