@@ -152,7 +152,6 @@ class ModuleSerializer(serializers.ModelSerializer):
 # ==========================================
 
 class CourseSerializer(serializers.ModelSerializer):
-    # Ab 'ModuleSerializer' define ho chuka hai, error nahi aayega
     modules = ModuleSerializer(many=True, required=False)
     
     class Meta:
@@ -160,17 +159,16 @@ class CourseSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ['slug', 'created_at', 'instructor']
 
-    # --- CREATE LOGIC ---
+    # --- CREATE LOGIC (Fixed for Files) ---
     def create(self, validated_data):
         modules_data = validated_data.pop('modules', [])
-        
         request = self.context.get('request')
+        
         if request and hasattr(request.user, 'instructor_profile'):
             validated_data['instructor'] = request.user.instructor_profile
 
         course = Course.objects.create(**validated_data)
 
-        # Nested Creation Logic
         for module_data in modules_data:
             weeks_data = module_data.pop('weeks', [])
             module = CourseModule.objects.create(course=course, **module_data)
@@ -180,14 +178,25 @@ class CourseSerializer(serializers.ModelSerializer):
                 week = CourseSubModule.objects.create(module=module, **week_data)
 
                 for lesson_data in lessons_data:
-                    lesson_data.pop('temp_video_key', None)
+                    # File handling keys ko remove karein
+                    video_key = lesson_data.pop('temp_video_key', None)
                     lesson_data.pop('temp_doc_key', None)
-                    Lesson.objects.create(week=week, **lesson_data)
+                    
+                    lesson = Lesson.objects.create(week=week, **lesson_data)
+                    
+                    # Agar request mein video file hai toh attach karein
+                    if video_key and request.FILES.get(video_key):
+                        lesson.content_file = request.FILES[video_key]
+                        lesson.save()
         
         return course
 
-    # --- UPDATE LOGIC ---
+    # --- UPDATE LOGIC (Updated for Quick Save & Nested Modules) ---
     def update(self, instance, validated_data):
+        modules_data = validated_data.pop('modules', None)
+        request = self.context.get('request')
+
+        # 1. Basic Fields Update
         instance.title = validated_data.get('title', instance.title)
         instance.description = validated_data.get('description', instance.description)
         instance.price = validated_data.get('price', instance.price)
@@ -195,4 +204,53 @@ class CourseSerializer(serializers.ModelSerializer):
         if validated_data.get('thumbnail'):
             instance.thumbnail = validated_data.get('thumbnail')
         instance.save()
+
+        # 2. Nested Modules Logic (Quick Save support)
+        if modules_data is not None:
+            for m_data in modules_data:
+                weeks_data = m_data.pop('weeks', [])
+                module_id = m_data.get('id')
+
+                if module_id:
+                    # Purane module ko update karein
+                    module_inst = CourseModule.objects.get(id=module_id, course=instance)
+                    module_inst.title = m_data.get('title', module_inst.title)
+                    module_inst.order = m_data.get('order', module_inst.order)
+                    module_inst.save()
+                else:
+                    # Naya module create karein
+                    module_inst = CourseModule.objects.create(course=instance, **m_data)
+
+                # 3. Nested Weeks Logic
+                for w_data in weeks_data:
+                    lessons_data = w_data.pop('lessons', [])
+                    week_id = w_data.get('id')
+
+                    if week_id:
+                        week_inst = CourseSubModule.objects.get(id=week_id, module=module_inst)
+                        week_inst.title = w_data.get('title', week_inst.title)
+                        week_inst.order = w_data.get('order', week_inst.order)
+                        week_inst.save()
+                    else:
+                        week_inst = CourseSubModule.objects.create(module=module_inst, **w_data)
+
+                    # 4. Nested Lessons Logic
+                    for l_data in lessons_data:
+                        lesson_id = l_data.get('id')
+                        video_key = l_data.pop('temp_video_key', None)
+                        l_data.pop('temp_doc_key', None)
+
+                        if lesson_id:
+                            lesson_inst = Lesson.objects.get(id=lesson_id, week=week_inst)
+                            for attr, value in l_data.items():
+                                setattr(lesson_inst, attr, value)
+                            lesson_inst.save()
+                        else:
+                            lesson_inst = Lesson.objects.create(week=week_inst, **l_data)
+
+                        # File Update Logic
+                        if video_key and request.FILES.get(video_key):
+                            lesson_inst.content_file = request.FILES[video_key]
+                            lesson_inst.save()
+
         return instance
