@@ -187,33 +187,52 @@ from rest_framework.permissions import IsAdminUser
 from django.utils import timezone
 
 class CreateFullCourseView(generics.CreateAPIView):
+    """
+    SkillSphere Deep Deployment View:
+    Handling nested Modules, Weeks, Lessons and Cloudinary file uploads.
+    """
     serializer_class = CourseSerializer
     permission_classes = [IsInstructor]
-    parser_classes = (MultiPartParser, FormParser) # File upload ke liye zaroori
+    parser_classes = (MultiPartParser, FormParser) # Multipart lazmi hai images/videos ke liye
 
     def create(self, request, *args, **kwargs):
-        # 1. Request data copy karein
+        # 1. Request data ki copy banayein taake modifications kar sakein
         data = request.data.copy()
 
-        # 2. 'modules' string ko wapis List/JSON mein convert karein
+        # 2. Frontend se aaya hua 'modules' JSON string hai, isay Python list mein badlein
         if 'modules' in data and isinstance(data['modules'], str):
             try:
                 data['modules'] = json.loads(data['modules'])
             except ValueError:
                 return Response(
-                    {"error": "Modules data is not valid JSON."}, 
+                    {"error": "Curriculum data format is invalid. Ensure it is valid JSON."}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        # 3. Ab Serializer ko data dein
-        serializer = self.get_serializer(data=data)
-        if serializer.is_valid():
-            self.perform_create(serializer)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # 3. Serializer initialize karein (Context ke sath taake Instructor profile attach ho)
+        serializer = self.get_serializer(data=data, context={'request': request})
         
-        # Agar error aaye to detail print karein debug ke liye
-        print("Serializer Errors:", serializer.errors) 
+        if serializer.is_valid():
+            # 4. Data database mein save karein
+            self.perform_create(serializer)
+            
+            # 5. Success response bhejein
+            return Response(
+                {
+                    "message": "Course deployed successfully to SkillSphere!",
+                    "course": serializer.data
+                }, 
+                status=status.HTTP_201_CREATED
+            )
+        
+        # 6. Agar validation fail ho (e.g. missing order or title), toh debug print karein
+        print("--- DEPLOYMENT ERROR LOG ---")
+        print(serializer.errors) 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def perform_create(self, serializer):
+        # Instructor profile serializer ke create method mein handle ho rahi hai
+        serializer.save()
 
 
 # ----- Asset and Topic APIs -----
